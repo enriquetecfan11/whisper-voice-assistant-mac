@@ -30,17 +30,34 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Colores ANSI para la terminal
+COLOR_RESET  = "\033[0m"
+COLOR_CYAN   = "\033[96m"
+COLOR_GREEN  = "\033[92m"
+COLOR_YELLOW = "\033[93m"
+COLOR_BLUE   = "\033[94m"
+COLOR_GRAY   = "\033[90m"
+COLOR_BOLD   = "\033[1m"
+
+
+def print_status(emoji: str, label: str, color: str, text: str = "") -> None:
+    """Imprime una linea de estado con formato visual limpio."""
+    msg = f"{color}{COLOR_BOLD}{emoji}  {label}{COLOR_RESET}"
+    if text:
+        msg += f"  {COLOR_GRAY}{text}{COLOR_RESET}"
+    print(f"\r{msg}")
+
 
 class WhisperVoiceAssistant:
     def __init__(self):
         self.running = False
-        logger.info(f"Cargando modelo Whisper: {WHISPER_MODEL}")
+        print_status("...", "Cargando modelo Whisper", COLOR_GRAY, WHISPER_MODEL)
         self.model = WhisperModel(
             WHISPER_MODEL,
             device=WHISPER_DEVICE,
             compute_type=WHISPER_COMPUTE_TYPE
         )
-        logger.info("Modelo Whisper cargado")
+        print_status("OK ", "Modelo Whisper listo", COLOR_GREEN)
 
         # Inicializar PyAudio
         self.audio = pyaudio.PyAudio()
@@ -84,46 +101,56 @@ class WhisperVoiceAssistant:
     def run(self):
         """Inicia el asistente de voz escuchando continuamente."""
         self.running = True
-        logger.info("=" * 50)
-        logger.info("Whisper Voice Assistant para macOS")
-        logger.info("Escuchando continuamente... (Ctrl+C para salir)")
-        logger.info("Habla con normalidad, Groq respondera por voz")
-        logger.info("=" * 50)
+
+        # Cabecera de bienvenida
+        print()
+        print(f"{COLOR_BOLD}{COLOR_CYAN}{'=' * 50}{COLOR_RESET}")
+        print(f"{COLOR_BOLD}{COLOR_CYAN}   Whisper Voice Assistant para macOS{COLOR_RESET}")
+        print(f"{COLOR_BOLD}{COLOR_CYAN}{'=' * 50}{COLOR_RESET}")
+        print(f"{COLOR_GRAY}  Modelo : {WHISPER_MODEL} | Idioma: {WHISPER_LANGUAGE}{COLOR_RESET}")
+        print(f"{COLOR_GRAY}  Sal con Ctrl+C{COLOR_RESET}")
+        print(f"{COLOR_BOLD}{COLOR_CYAN}{'=' * 50}{COLOR_RESET}")
+        print()
 
         # Saludo inicial
+        print_status(">>>", "Hablando", COLOR_BLUE, "Hola, estoy listo. Puedes hablarme.")
         speak("Hola, estoy listo. Puedes hablarme.")
 
         try:
             while self.running:
-                logger.info("-" * 40)
-                logger.info(f"Grabando {AUDIO_CHUNK_DURATION}s... habla ahora")
+                # Estado: escuchando
+                print_status("MIC", "Escuchando...", COLOR_CYAN)
                 audio = self._record_audio(AUDIO_CHUNK_DURATION)
 
-                # Filtro de silencio: no enviar a Whisper ni a Groq si no hay voz
+                # Filtro de silencio
                 if not self._has_speech(audio):
-                    logger.debug("Silencio detectado, saltando...")
+                    print_status("---", "Silencio", COLOR_GRAY)
                     continue
 
-                # Transcribir voz a texto
+                # Estado: transcribiendo
+                print_status("...", "Transcribiendo...", COLOR_YELLOW)
                 text = self._transcribe(audio)
 
                 if not text:
-                    logger.debug("Transcripcion vacia")
+                    print_status("---", "Sin texto detectado", COLOR_GRAY)
                     continue
 
+                # Mostrar lo que dijo el usuario
+                print_status("TU ", "Tu", COLOR_GREEN, f'"{text}"')
                 if LOG_TRANSCRIPTIONS:
-                    logger.info(f"Tu: '{text}'")
+                    logger.debug(f"Transcripcion: {text}")
 
-                # Enviar a Groq y obtener respuesta
-                logger.info("Consultando Groq...")
+                # Estado: pensando (llamada a Groq)
+                print_status("...", "Pensando...", COLOR_YELLOW)
                 response = ask_groq(text)
-                logger.info(f"Asistente: '{response}'")
 
-                # Hablar la respuesta en voz alta
+                # Estado: hablando
+                print_status(">>>", "Asistente", COLOR_BLUE, f'"{response}"')
                 speak(response)
 
         except KeyboardInterrupt:
-            logger.info("\nDeteniendo asistente...")
+            print()
+            print(f"{COLOR_GRAY}  Deteniendo asistente...{COLOR_RESET}")
         finally:
             self.stop()
 
@@ -131,8 +158,8 @@ class WhisperVoiceAssistant:
         """Detiene el asistente y libera recursos."""
         self.running = False
         self.audio.terminate()
+        print_status("BYE", "Hasta luego", COLOR_CYAN)
         speak("Hasta luego.")
-        logger.info("Asistente detenido.")
 
 
 if __name__ == "__main__":
