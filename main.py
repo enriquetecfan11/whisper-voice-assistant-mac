@@ -19,6 +19,7 @@ from config import (
     LOG_LEVEL, LOG_TRANSCRIPTIONS
 )
 from groq_client import ask_groq, speak
+from actions import process_command
 
 # Configurar logging
 logging.basicConfig(
@@ -39,53 +40,61 @@ COLOR_BLUE   = "\033[94m"
 COLOR_GRAY   = "\033[90m"
 COLOR_BOLD   = "\033[1m"
 
+# Palabras clave que indican comandos de accion directa (no LLM)
+ACTION_KEYWORDS = [
+    "abre", "abrir", "captura", "screenshot", "pantalla",
+    "anota", "apunta", "busca", "buscar", "googlea"
+]
 
-def print_status(emoji: str, label: str, color: str, text: str = "") -> None:
-    """Imprime una linea de estado con formato visual limpio."""
-    msg = f"{color}{COLOR_BOLD}{emoji}  {label}{COLOR_RESET}"
-    if text:
-        msg += f"  {COLOR_GRAY}{text}{COLOR_RESET}"
-    print(f"\r{msg}")
+
+def print_status(icon: str, color: str, label: str, message: str = "") -> None:
+    """Imprime una linea de estado con formato y color."""
+    if message:
+        print(f"{color}{COLOR_BOLD}{icon}  {label}{COLOR_RESET}  {message}")
+    else:
+        print(f"{color}{COLOR_BOLD}{icon}  {label}{COLOR_RESET}")
+
+
+def is_action_command(text: str) -> bool:
+    """Detecta si el texto es un comando de accion directa (abrir app, buscar, etc)."""
+    text_lower = text.lower().strip()
+    return any(kw in text_lower for kw in ACTION_KEYWORDS)
 
 
 class WhisperVoiceAssistant:
     def __init__(self):
-        self.running = False
-        print_status("...", "Cargando modelo Whisper", COLOR_GRAY, WHISPER_MODEL)
+        print_status(">>>", COLOR_CYAN, "Cargando", f"Modelo Whisper '{WHISPER_MODEL}'...")
         self.model = WhisperModel(
             WHISPER_MODEL,
             device=WHISPER_DEVICE,
             compute_type=WHISPER_COMPUTE_TYPE
         )
-        print_status("OK ", "Modelo Whisper listo", COLOR_GREEN)
-
-        # Inicializar PyAudio
         self.audio = pyaudio.PyAudio()
-        self.chunk_size = int(AUDIO_SAMPLE_RATE * 0.5)  # 500ms de buffer
+        self.running = False
+        print_status("OK ", COLOR_GREEN, "Listo", "Modelo cargado")
 
-    def _record_audio(self, duration: float) -> np.ndarray:
-        """Graba audio durante un numero de segundos."""
-        frames = []
-        num_frames = int(AUDIO_SAMPLE_RATE / self.chunk_size * duration)
+    def _record_audio(self, duration: int) -> np.ndarray:
+        """Graba audio del microfono durante 'duration' segundos."""
         stream = self.audio.open(
-            format=pyaudio.paInt16,
+            format=pyaudio.paFloat32,
             channels=AUDIO_CHANNELS,
             rate=AUDIO_SAMPLE_RATE,
             input=True,
-            frames_per_buffer=self.chunk_size
+            frames_per_buffer=1024
         )
-        for _ in range(num_frames):
-            data = stream.read(self.chunk_size, exception_on_overflow=False)
-            frames.append(data)
+        frames = []
+        num_chunks = int(AUDIO_SAMPLE_RATE / 1024 * duration)
+        for _ in range(num_chunks):
+            data = stream.read(1024, exception_on_overflow=False)
+            frames.append(np.frombuffer(data, dtype=np.float32))
         stream.stop_stream()
         stream.close()
-        audio_data = np.frombuffer(b''.join(frames), dtype=np.int16)
-        return audio_data.astype(np.float32) / 32768.0
+        return np.concatenate(frames)
 
-    def _has_speech(self, audio: np.ndarray, threshold: float = 0.01) -> bool:
-        """Detecta si hay voz en el audio por nivel de energia RMS."""
+    def _has_speech(self, audio: np.ndarray) -> bool:
+        """Detecta si hay voz en el audio por energia RMS."""
         rms = np.sqrt(np.mean(audio ** 2))
-        return rms > threshold
+        return rms > 0.01
 
     def _transcribe(self, audio: np.ndarray) -> str:
         """Transcribe audio usando faster-whisper."""
@@ -102,64 +111,67 @@ class WhisperVoiceAssistant:
         """Inicia el asistente de voz escuchando continuamente."""
         self.running = True
 
-        # Cabecera de bienvenida
-        print()
-        print(f"{COLOR_BOLD}{COLOR_CYAN}{'=' * 50}{COLOR_RESET}")
-        print(f"{COLOR_BOLD}{COLOR_CYAN}   Whisper Voice Assistant para macOS{COLOR_RESET}")
-        print(f"{COLOR_BOLD}{COLOR_CYAN}{'=' * 50}{COLOR_RESET}")
-        print(f"{COLOR_GRAY}  Modelo : {WHISPER_MODEL} | Idioma: {WHISPER_LANGUAGE}{COLOR_RESET}")
-        print(f"{COLOR_GRAY}  Sal con Ctrl+C{COLOR_RESET}")
-        print(f"{COLOR_BOLD}{COLOR_CYAN}{'=' * 50}{COLOR_RESET}")
-        print()
+        print(f"\n{'='*50}")
+        print(f"   {COLOR_BOLD}Whisper Voice Assistant para macOS{COLOR_RESET}")
+        print(f"{'='*50}")
+        print(f"  Modelo : {WHISPER_MODEL} | Idioma: {WHISPER_LANGUAGE}")
+        print(f"  Sal con Ctrl+C")
+        print(f"{'='*50}\n")
 
         # Saludo inicial
-        print_status(">>>", "Hablando", COLOR_BLUE, "Hola, estoy listo. Puedes hablarme.")
-        speak("Hola, estoy listo. Puedes hablarme.")
+        greeting = "Hola, estoy listo. Puedes hablarme."
+        print_status(">>>", COLOR_CYAN, " Hablando ", greeting)
+        speak(greeting)
 
         try:
             while self.running:
                 # Estado: escuchando
-                print_status("MIC", "Escuchando...", COLOR_CYAN)
+                print_status("MIC", COLOR_BLUE, " Escuchando...")
                 audio = self._record_audio(AUDIO_CHUNK_DURATION)
 
                 # Filtro de silencio
                 if not self._has_speech(audio):
-                    print_status("---", "Silencio", COLOR_GRAY)
                     continue
 
                 # Estado: transcribiendo
-                print_status("...", "Transcribiendo...", COLOR_YELLOW)
+                print_status("...", COLOR_GRAY, " Transcribiendo...")
                 text = self._transcribe(audio)
 
                 if not text:
-                    print_status("---", "Sin texto detectado", COLOR_GRAY)
                     continue
 
-                # Mostrar lo que dijo el usuario
-                print_status("TU ", "Tu", COLOR_GREEN, f'"{text}"')
+                print_status("TU ", COLOR_GREEN, " Tu ", f'"{text}"')
+
                 if LOG_TRANSCRIPTIONS:
                     logger.debug(f"Transcripcion: {text}")
 
-                # Estado: pensando (llamada a Groq)
-                print_status("...", "Pensando...", COLOR_YELLOW)
-                response = ask_groq(text)
+                # Detectar si es un comando de accion directa
+                if is_action_command(text):
+                    print_status("CMD", COLOR_YELLOW, " Accion ", f'"{text}"')
+                    action_result = process_command(text)
+                    logger.info(f"Accion ejecutada: {action_result}")
+                    # Confirmar la accion con el LLM para dar respuesta natural
+                    response = ask_groq(f"[ACCION EJECUTADA: {action_result}] Confirma brevemente al usuario que realizaste: {text}")
+                else:
+                    # Conversacion normal con el LLM
+                    print_status("...", COLOR_GRAY, " Pensando...")
+                    response = ask_groq(text)
 
                 # Estado: hablando
-                print_status(">>>", "Asistente", COLOR_BLUE, f'"{response}"')
+                print_status(">>>", COLOR_CYAN, " Asistente ", f'"{response}"')
                 speak(response)
 
         except KeyboardInterrupt:
-            print()
-            print(f"{COLOR_GRAY}  Deteniendo asistente...{COLOR_RESET}")
-        finally:
             self.stop()
 
     def stop(self):
-        """Detiene el asistente y libera recursos."""
+        """Detiene el asistente limpiamente."""
         self.running = False
+        print(f"\n  {COLOR_YELLOW}Deteniendo asistente...{COLOR_RESET}")
+        farewell = "Hasta luego"
+        print_status("BYE", COLOR_CYAN, " Hasta luego")
+        speak(farewell)
         self.audio.terminate()
-        print_status("BYE", "Hasta luego", COLOR_CYAN)
-        speak("Hasta luego.")
 
 
 if __name__ == "__main__":
