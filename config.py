@@ -29,3 +29,23 @@ NOTES_DIR = os.path.expanduser("~/Documents/VoiceNotes")
 # =======================
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")  # DEBUG, INFO, WARNING, ERROR
 LOG_TRANSCRIPTIONS = os.getenv("LOG_TRANSCRIPTIONS", "true").lower() == "true"
+
+# =======================
+# GROQ API
+# =======================
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama3-70b-8192")  # llama3-70b-8192, mixtral-8x7b-32768, gemma-7b-it
+GROQ_SYSTEM_PROMPT = os.getenv(
+    "GROQ_SYSTEM_PROMPT",
+    "Eres un asistente de voz para macOS. Responde siempre en el mismo idioma que el usuario. "
+    "Tus respuestas deben ser cortas, claras y naturales para ser escuchadas en voz alta. "
+    "No uses markdown, listas con guiones ni emojis. Habla como si fueras una persona."
+)
+
+# =======================
+# TTS (Text to Speech)
+# =======================
+# Voz de macOS para el comando 'say'. Opciones en ES: Monica, Jorge
+# Opciones en EN: Samantha, Alex
+TTS_VOICE = os.getenv("TTS_VOICE", "Monica")
+TTS_RATE = int(os.getenv("TTS_RATE", "175"))  # palabras por minuto (default macOS: 175)
