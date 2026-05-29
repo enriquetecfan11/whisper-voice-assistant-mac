@@ -1,10 +1,65 @@
 import os
+import re
 import subprocess
 import datetime
 import logging
+import urllib.parse
 from config import SCREENSHOT_DIR, NOTES_DIR
 
 logger = logging.getLogger(__name__)
+
+# Mapa completo de apps: palabras clave -> nombre real en macOS
+APP_MAP = {
+    # Navegadores
+    "safari": "Safari",
+    "chrome": "Google Chrome",
+    "firefox": "Firefox",
+    "brave": "Brave Browser",
+    # Productividad
+    "notas": "Notes",
+    "notes": "Notes",
+    "nota": "Notes",
+    "calendario": "Calendar",
+    "calendar": "Calendar",
+    "recordatorios": "Reminders",
+    "reminders": "Reminders",
+    "mail": "Mail",
+    "correo": "Mail",
+    "mensajes": "Messages",
+    "messages": "Messages",
+    "facetime": "FaceTime",
+    # Desarrollo
+    "terminal": "Terminal",
+    "vscode": "Visual Studio Code",
+    "vs code": "Visual Studio Code",
+    "visual studio": "Visual Studio Code",
+    "xcode": "Xcode",
+    "cursor": "Cursor",
+    # Multimedia
+    "spotify": "Spotify",
+    "musica": "Music",
+    "music": "Music",
+    "podcasts": "Podcasts",
+    "fotos": "Photos",
+    "photos": "Photos",
+    "quicktime": "QuickTime Player",
+    # Sistema
+    "finder": "Finder",
+    "preferencias": "System Preferences",
+    "ajustes": "System Settings",
+    "system settings": "System Settings",
+    "monitor de actividad": "Activity Monitor",
+    "activity monitor": "Activity Monitor",
+    # Otros
+    "slack": "Slack",
+    "discord": "Discord",
+    "zoom": "Zoom",
+    "notion": "Notion",
+    "obsidian": "Obsidian",
+    "figma": "Figma",
+    "whatsapp": "WhatsApp",
+    "telegram": "Telegram",
+}
 
 
 def take_screenshot() -> str:
@@ -34,79 +89,79 @@ def save_note(text: str) -> str:
 
 
 def web_search(query: str) -> str:
-    """Abre el navegador con una búsqueda en DuckDuckGo."""
-    import urllib.parse
+    """Abre el navegador con una busqueda en DuckDuckGo."""
     encoded = urllib.parse.quote(query)
     url = f"https://duckduckgo.com/?q={encoded}"
     subprocess.run(["open", url])
-    logger.info(f"Búsqueda abierta: {query}")
     return f"Buscando: {query}"
 
 
 def open_app(app_name: str) -> str:
-    """Abre una aplicación de macOS."""
-    result = subprocess.run(["open", "-a", app_name], capture_output=True)
+    """Abre una aplicacion de macOS por nombre."""
+    result = subprocess.run(["open", "-a", app_name], capture_output=True, text=True)
     if result.returncode == 0:
+        logger.info(f"Abierta app: {app_name}")
         return f"Abriendo {app_name}"
     else:
-        return f"No se encontró la aplicación: {app_name}"
+        logger.warning(f"App no encontrada: {app_name}")
+        return f"No encontre la aplicacion: {app_name}"
 
 
-def run_shell_command(command: str) -> str:
-    """Ejecuta un comando de terminal (solo comandos seguros predefinidos)."""
-    # Lista blanca de comandos seguros
-    SAFE_COMMANDS = ["ls", "pwd", "date", "whoami", "uptime", "df", "free"]
-    cmd_parts = command.strip().split()
-    if not cmd_parts or cmd_parts[0] not in SAFE_COMMANDS:
-        return f"Comando no permitido: {cmd_parts[0] if cmd_parts else 'vacío'}"
-    result = subprocess.run(cmd_parts, capture_output=True, text=True, timeout=10)
-    return result.stdout.strip() or result.stderr.strip()
+def _extract_app_name(text: str) -> str:
+    """Extrae el nombre de la app del texto usando el APP_MAP."""
+    text_lower = text.lower()
+
+    # Buscar coincidencia exacta en el mapa (de la mas larga a la mas corta)
+    for key in sorted(APP_MAP.keys(), key=len, reverse=True):
+        if key in text_lower:
+            return APP_MAP[key]
+
+    # Fallback: intentar extraer la ultima palabra/frase tras verbos de apertura
+    match = re.search(
+        r'(?:abre|abrir|lanza|lanzar|inicia|iniciar|abre la aplicacion de|abre la app de)\s+(.+)',
+        text_lower
+    )
+    if match:
+        app_raw = match.group(1).strip()
+        # Limpiar articulos y preposiciones
+        for noise in ["la aplicacion de", "la app de", "la", "el", "de"]:
+            app_raw = app_raw.replace(noise, "").strip()
+        return app_raw.title()
+
+    return ""
 
 
 def process_command(text: str) -> str:
     """
-    Procesa el texto transcrito y ejecuta la acción correspondiente.
-    Retorna una descripción de la acción tomada.
+    Detecta el tipo de comando y lo ejecuta.
+    Retorna string con el resultado de la accion.
     """
     text_lower = text.lower().strip()
     logger.info(f"Procesando comando: {text_lower}")
 
     # Captura de pantalla
-    if any(w in text_lower for w in ["captura", "screenshot", "pantalla", "foto"]):
+    if any(w in text_lower for w in ["captura", "screenshot", "foto de pantalla"]):
         return take_screenshot()
 
     # Guardar nota
-    elif any(w in text_lower for w in ["anota", "apunta", "nota", "recuerda"]):
-        # Extraer el texto a anotar (quitar la palabra de comando)
+    if any(w in text_lower for w in ["anota", "apunta", "guarda una nota"]):
         note_text = text_lower
-        for w in ["anota", "apunta", "nota", "recuerda que", "recuerda"]:
+        for w in ["anota que", "anota", "apunta que", "apunta", "guarda una nota de", "guarda una nota"]:
             note_text = note_text.replace(w, "").strip()
-        return save_note(note_text if note_text else text)
+        return save_note(note_text or text)
 
-    # Búsqueda web
-    elif any(w in text_lower for w in ["busca", "buscar", "search", "googlea"]):
+    # Busqueda web
+    if any(w in text_lower for w in ["busca", "buscar", "search", "googlea"]):
         query = text_lower
-        for w in ["busca", "buscar", "search", "googlea"]:
+        for w in ["busca en internet", "busca", "buscar", "search", "googlea"]:
             query = query.replace(w, "").strip()
-        return web_search(query if query else text)
+        return web_search(query or text)
 
-    # Abrir aplicaciones
-    elif "abre" in text_lower or "abrir" in text_lower:
-        app = text_lower.replace("abre", "").replace("abrir", "").strip()
-        APP_MAP = {
-            "safari": "Safari",
-            "chrome": "Google Chrome",
-            "terminal": "Terminal",
-            "vscode": "Visual Studio Code",
-            "vs code": "Visual Studio Code",
-            "spotify": "Spotify",
-            "notas": "Notes",
-            "calendario": "Calendar",
-        }
-        app_name = APP_MAP.get(app, app.title())
-        return open_app(app_name)
+    # Abrir aplicacion
+    if any(w in text_lower for w in ["abre", "abrir", "lanza", "inicia", "abre la", "abrir la"]):
+        app_name = _extract_app_name(text)
+        if app_name:
+            return open_app(app_name)
+        return "No entendi que aplicacion quieres abrir."
 
-    # Comando no reconocido
-    else:
-        logger.warning(f"Comando no reconocido: {text_lower}")
-        return f"Comando no reconocido: '{text}'"
+    return f"Comando no reconocido: '{text}'"
