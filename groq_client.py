@@ -74,16 +74,13 @@ def _handle_system_commands(text: str) -> Optional[str]:
 
 def ask_groq(user_input: str) -> str:
     """Envia el mensaje al LLM de Groq y devuelve la respuesta."""
-    # Comandos especiales de memoria
     special = _handle_system_commands(user_input)
     if special:
         return special
 
-    # Guardar input en memoria persistente si parece relevante
     if len(user_input.split()) > 4:
         remember(f"Usuario dijo: {user_input}")
 
-    # Construir mensajes
     system_prompt = _build_system_prompt()
     messages = [{"role": "system", "content": system_prompt}]
     messages.extend(_conversation_history[-20:])
@@ -99,11 +96,9 @@ def ask_groq(user_input: str) -> str:
         )
         reply = response.choices[0].message.content.strip()
 
-        # Guardar en historial de sesion
         _conversation_history.append({"role": "user", "content": user_input})
         _conversation_history.append({"role": "assistant", "content": reply})
 
-        # Guardar respuesta relevante en memoria
         if len(reply.split()) > 6:
             remember(f"Asistente respondio: {reply[:200]}")
 
@@ -114,19 +109,29 @@ def ask_groq(user_input: str) -> str:
 
 
 def _speak_groq_tts(text: str) -> bool:
-    """Convierte texto a voz usando Groq TTS (PlayAI). Funciona con cualquier idioma."""
+    """Convierte texto a voz usando Groq TTS (PlayAI). Compatible con cualquier version del SDK."""
     try:
         client = _get_client()
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-            tmp_path = f.name
-
         response = client.audio.speech.create(
             model=GROQ_TTS_MODEL,
             voice=GROQ_TTS_VOICE,
             input=text,
             response_format="wav",
         )
-        response.stream_to_file(tmp_path)
+
+        # Compatibilidad con distintas versiones del SDK de Groq
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+            tmp_path = f.name
+            if hasattr(response, 'stream_to_file'):
+                f.close()
+                response.stream_to_file(tmp_path)
+            elif hasattr(response, 'write_to_file'):
+                f.close()
+                response.write_to_file(tmp_path)
+            else:
+                # Fallback: leer el contenido directamente
+                f.write(response.content)
+
         subprocess.run(["afplay", tmp_path], check=True)
         os.unlink(tmp_path)
         return True
