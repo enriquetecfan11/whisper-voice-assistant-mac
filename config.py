@@ -53,7 +53,7 @@ TTS_ENGINE = os.getenv("TTS_ENGINE", "groq")  # groq | say
 
 # Modelo y voz para Groq TTS (solo ingles)
 GROQ_TTS_MODEL = os.getenv("GROQ_TTS_MODEL", "canopylabs/orpheus-v1-english")
-GROQ_TTS_VOICE = os.getenv("GROQ_TTS_VOICE", "tara")  # tara, leo, dan, mia, zac, jess, julia, leah
+GROQ_TTS_VOICE = os.getenv("GROQ_TTS_VOICE", "leah")  # tara, leo, dan, mia, zac, jess, julia, leah
 
 # Configuracion para macOS say (fallback o cuando TTS_ENGINE=say)
 TTS_VOICE = os.getenv("TTS_VOICE", "Monica")  # Monica, Jorge (ES) | Samantha, Alex (EN)
