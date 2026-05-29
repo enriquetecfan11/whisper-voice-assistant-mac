@@ -1,8 +1,5 @@
-# Transcripción de voz
+# Transcripcion de voz
 faster-whisper==1.0.3
-
-# Detección de hotword
-pvporcupine==3.0.2
 
 # Captura de audio
 pyaudio==0.2.14
@@ -11,10 +8,7 @@ pyaudio==0.2.14
 numpy==1.26.4
 sounddevice==0.4.6
 
-# VAD (Voice Activity Detection)
-webrtcvad==2.0.10
-
-# Solicitudes HTTP (opcional, para futuras integraciones)
+# Solicitudes HTTP
 requests==2.31.0
 
 # Logging y utilidades
