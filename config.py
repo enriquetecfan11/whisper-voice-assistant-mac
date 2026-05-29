@@ -34,7 +34,7 @@ LOG_TRANSCRIPTIONS = os.getenv("LOG_TRANSCRIPTIONS", "true").lower() == "true"
 # GROQ API
 # =======================
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-GROQ_MODEL = os.getenv("GROQ_MODEL", "llama3-70b-8192")  # llama3-70b-8192, mixtral-8x7b-32768, gemma-7b-it
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama3-70b-8192")  # llama3-70b-8192, mixtral-8x7b-32768
 GROQ_SYSTEM_PROMPT = os.getenv(
     "GROQ_SYSTEM_PROMPT",
     "Eres un asistente de voz para macOS. Responde siempre en el mismo idioma que el usuario. "
@@ -45,7 +45,16 @@ GROQ_SYSTEM_PROMPT = os.getenv(
 # =======================
 # TTS (Text to Speech)
 # =======================
-# Voz de macOS para el comando 'say'. Opciones en ES: Monica, Jorge
-# Opciones en EN: Samantha, Alex
-TTS_VOICE = os.getenv("TTS_VOICE", "Monica")
-TTS_RATE = int(os.getenv("TTS_RATE", "175"))  # palabras por minuto (default macOS: 175)
+# TTS_ENGINE opciones:
+#   "groq"  -> Groq TTS API (canopylabs/orpheus-v1-english) - solo ingles, muy natural
+#   "say"   -> macOS say (nativo, sin dependencias, soporta ES y EN)
+# Si WHISPER_LANGUAGE != "en", se usa "say" siempre como fallback automatico
+TTS_ENGINE = os.getenv("TTS_ENGINE", "groq")  # groq | say
+
+# Modelo y voz para Groq TTS (solo ingles)
+GROQ_TTS_MODEL = os.getenv("GROQ_TTS_MODEL", "canopylabs/orpheus-v1-english")
+GROQ_TTS_VOICE = os.getenv("GROQ_TTS_VOICE", "tara")  # tara, leo, dan, mia, zac, jess, julia, leah
+
+# Configuracion para macOS say (fallback o cuando TTS_ENGINE=say)
+TTS_VOICE = os.getenv("TTS_VOICE", "Monica")  # Monica, Jorge (ES) | Samantha, Alex (EN)
+TTS_RATE = int(os.getenv("TTS_RATE", "175"))  # palabras por minuto
