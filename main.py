@@ -2,25 +2,23 @@
 """
 Whisper Voice Assistant para macOS
 
-Asistente de voz local que usa faster-whisper para transcripcion
-y detecta comandos de voz para ejecutar acciones en macOS.
+Asistente de voz local que usa faster-whisper para transcripcion,
+Groq API para respuestas con LLM y macOS 'say' para hablar.
 
 Uso:
-    python main.py   # Escucha continuamente
+    python main.py   # Escucha continuamente y responde por voz
 """
-
 import logging
 import sys
 import numpy as np
 import pyaudio
 from faster_whisper import WhisperModel
-
 from config import (
     WHISPER_MODEL, WHISPER_LANGUAGE, WHISPER_DEVICE, WHISPER_COMPUTE_TYPE,
     AUDIO_SAMPLE_RATE, AUDIO_CHANNELS, AUDIO_CHUNK_DURATION,
     LOG_LEVEL, LOG_TRANSCRIPTIONS
 )
-from actions import process_command
+from groq_client import ask_groq, speak
 
 # Configurar logging
 logging.basicConfig(
@@ -36,7 +34,6 @@ logger = logging.getLogger(__name__)
 class WhisperVoiceAssistant:
     def __init__(self):
         self.running = False
-
         logger.info(f"Cargando modelo Whisper: {WHISPER_MODEL}")
         self.model = WhisperModel(
             WHISPER_MODEL,
@@ -68,6 +65,11 @@ class WhisperVoiceAssistant:
         audio_data = np.frombuffer(b''.join(frames), dtype=np.int16)
         return audio_data.astype(np.float32) / 32768.0
 
+    def _has_speech(self, audio: np.ndarray, threshold: float = 0.01) -> bool:
+        """Detecta si hay voz en el audio por nivel de energia RMS."""
+        rms = np.sqrt(np.mean(audio ** 2))
+        return rms > threshold
+
     def _transcribe(self, audio: np.ndarray) -> str:
         """Transcribe audio usando faster-whisper."""
         segments, info = self.model.transcribe(
@@ -85,21 +87,41 @@ class WhisperVoiceAssistant:
         logger.info("=" * 50)
         logger.info("Whisper Voice Assistant para macOS")
         logger.info("Escuchando continuamente... (Ctrl+C para salir)")
-        logger.info("Comandos: captura, anota, busca, abre")
+        logger.info("Habla con normalidad, Groq respondera por voz")
         logger.info("=" * 50)
+
+        # Saludo inicial
+        speak("Hola, estoy listo. Puedes hablarme.")
+
         try:
             while self.running:
                 logger.info("-" * 40)
                 logger.info(f"Grabando {AUDIO_CHUNK_DURATION}s... habla ahora")
                 audio = self._record_audio(AUDIO_CHUNK_DURATION)
+
+                # Filtro de silencio: no enviar a Whisper ni a Groq si no hay voz
+                if not self._has_speech(audio):
+                    logger.debug("Silencio detectado, saltando...")
+                    continue
+
+                # Transcribir voz a texto
                 text = self._transcribe(audio)
-                if text:
-                    if LOG_TRANSCRIPTIONS:
-                        logger.info(f"Transcripcion: '{text}'")
-                    result = process_command(text)
-                    logger.info(f"Resultado: {result}")
-                else:
-                    logger.debug("No se detecto voz")
+
+                if not text:
+                    logger.debug("Transcripcion vacia")
+                    continue
+
+                if LOG_TRANSCRIPTIONS:
+                    logger.info(f"Tu: '{text}'")
+
+                # Enviar a Groq y obtener respuesta
+                logger.info("Consultando Groq...")
+                response = ask_groq(text)
+                logger.info(f"Asistente: '{response}'")
+
+                # Hablar la respuesta en voz alta
+                speak(response)
+
         except KeyboardInterrupt:
             logger.info("\nDeteniendo asistente...")
         finally:
@@ -109,6 +131,7 @@ class WhisperVoiceAssistant:
         """Detiene el asistente y libera recursos."""
         self.running = False
         self.audio.terminate()
+        speak("Hasta luego.")
         logger.info("Asistente detenido.")
 
 
