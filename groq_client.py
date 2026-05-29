@@ -38,119 +38,87 @@ def _load_md(filename: str) -> str:
     if not path.exists():
         logger.warning(f"{filename} no encontrado en {_BASE_DIR}")
         return ""
-    try:
-        return path.read_text(encoding="utf-8").strip()
-    except IOError as e:
-        logger.warning(f"No se pudo leer {filename}: {e}")
-        return ""
+    return path.read_text(encoding="utf-8")
 
 
 def _build_system_prompt() -> str:
-    """
-    Construye el system prompt completo combinando:
-    1. SYSTEM.md  -> capacidades, reglas, entorno tecnico
-    2. SOUL.md    -> personalidad, tono, caracter
-    3. Memoria    -> hechos e info del usuario de sesiones anteriores
-    4. Fallback   -> GROQ_SYSTEM_PROMPT del .env si los .md no existen
-    """
-    parts = []
-
+    """Construye el system prompt combinando SYSTEM.md, SOUL.md y memoria persistente."""
     system_md = _load_md("SYSTEM.md")
     soul_md = _load_md("SOUL.md")
     memory_text = get_memory_as_text()
 
+    parts = []
     if system_md:
         parts.append(system_md)
     if soul_md:
-        parts.append(soul_md)
-
+        parts.append(f"\n\n## Personalidad y alma\n{soul_md}")
+    if memory_text:
+        parts.append(f"\n\n## Memoria persistente del usuario\n{memory_text}")
     if not parts:
         parts.append(GROQ_SYSTEM_PROMPT)
 
-    if memory_text:
-        parts.append(f"\n---\n{memory_text}")
-
-    return "\n\n".join(parts)
+    return "\n".join(parts)
 
 
 def _handle_system_commands(text: str) -> Optional[str]:
-    """
-    Detecta comandos especiales de sistema en el texto transcrito.
-    Devuelve la respuesta directa si es un comando, None si no lo es.
-    """
-    text_lower = text.lower().strip()
-
-    if any(w in text_lower for w in ["borra el historial", "limpia el historial", "nueva conversacion"]):
-        _conversation_history.clear()
-        return "Historial limpiado. Empezamos de cero."
-
-    if any(w in text_lower for w in ["que recuerdas", "que sabes de mi", "lo que recuerdas"]):
-        return get_summary()
-
-    if any(w in text_lower for w in ["olvida todo", "borra todo lo que sabes", "borra tu memoria"]):
+    """Detecta comandos especiales y los ejecuta. Retorna respuesta o None."""
+    t = text.lower().strip()
+    if any(k in t for k in ["olvida todo", "borra tu memoria", "resetea tu memoria"]):
         forget_all()
-        return "Memoria borrada. Ya no recuerdo nada."
-
+        return "Memoria borrada. Empezamos de cero."
+    if any(k in t for k in ["que recuerdas", "que sabes de mi", "resumen de memoria"]):
+        summary = get_summary()
+        return summary if summary else "No tengo nada guardado sobre ti todavia."
     return None
 
 
-def ask_groq(user_text: str) -> str:
-    """
-    Envia el texto del usuario a la API de Groq y devuelve la respuesta del LLM.
-    - Detecta comandos de sistema antes de llamar a la API
-    - Carga SYSTEM.md + SOUL.md + memoria en el system prompt
-    - Mantiene historial de conversacion durante la sesion
-    """
-    if not GROQ_API_KEY:
-        logger.error("GROQ_API_KEY no configurada en .env")
-        return "No tengo configurada la clave de Groq. Revisa el archivo punto env."
+def ask_groq(user_input: str) -> str:
+    """Envia el mensaje al LLM de Groq y devuelve la respuesta."""
+    # Comandos especiales de memoria
+    special = _handle_system_commands(user_input)
+    if special:
+        return special
 
-    system_response = _handle_system_commands(user_text)
-    if system_response is not None:
-        return system_response
+    # Guardar input en memoria persistente si parece relevante
+    if len(user_input.split()) > 4:
+        remember(f"Usuario dijo: {user_input}")
 
-    client = _get_client()
-
-    _conversation_history.append({"role": "user", "content": user_text})
-
+    # Construir mensajes
     system_prompt = _build_system_prompt()
-    messages = [{"role": "system", "content": system_prompt}] + _conversation_history
+    messages = [{"role": "system", "content": system_prompt}]
+    messages.extend(_conversation_history[-20:])
+    messages.append({"role": "user", "content": user_input})
 
     try:
-        logger.info(f"Enviando a Groq ({GROQ_MODEL}): '{user_text}'")
+        client = _get_client()
         response = client.chat.completions.create(
             model=GROQ_MODEL,
             messages=messages,
             temperature=0.7,
-            max_tokens=300,
+            max_tokens=512,
         )
-        assistant_reply = response.choices[0].message.content.strip()
+        reply = response.choices[0].message.content.strip()
 
-        _conversation_history.append({"role": "assistant", "content": assistant_reply})
+        # Guardar en historial de sesion
+        _conversation_history.append({"role": "user", "content": user_input})
+        _conversation_history.append({"role": "assistant", "content": reply})
 
-        if len(_conversation_history) > 20:
-            _conversation_history.pop(0)
-            _conversation_history.pop(0)
+        # Guardar respuesta relevante en memoria
+        if len(reply.split()) > 6:
+            remember(f"Asistente respondio: {reply[:200]}")
 
-        logger.info(f"Respuesta Groq: '{assistant_reply}'")
-        return assistant_reply
-
+        return reply
     except Exception as e:
-        logger.error(f"Error llamando a Groq LLM: {e}")
-        return "Ha ocurrido un error al consultar la inteligencia artificial."
+        logger.error(f"Error en Groq API: {e}")
+        return "Lo siento, hubo un error al procesar tu solicitud."
 
 
 def _speak_groq_tts(text: str) -> bool:
-    """
-    Convierte texto a voz usando la API TTS de Groq (canopylabs/orpheus).
-    Solo soporta ingles. Devuelve True si tuvo exito, False si fallo.
-    """
-    if not GROQ_API_KEY:
-        return False
+    """Convierte texto a voz usando Groq TTS (PlayAI). Funciona con cualquier idioma."""
     try:
         client = _get_client()
-        label = f"'{text[:50]}...'" if len(text) > 50 else f"'{text}'"
-        logger.info(f"Groq TTS ({GROQ_TTS_VOICE}): {label}")
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+            tmp_path = f.name
 
         response = client.audio.speech.create(
             model=GROQ_TTS_MODEL,
@@ -158,15 +126,10 @@ def _speak_groq_tts(text: str) -> bool:
             input=text,
             response_format="wav",
         )
-
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-            tmp_path = tmp.name
-            tmp.write(response.read())
-
+        response.stream_to_file(tmp_path)
         subprocess.run(["afplay", tmp_path], check=True)
         os.unlink(tmp_path)
         return True
-
     except Exception as e:
         logger.warning(f"Groq TTS fallo: {e}. Usando macOS say como fallback.")
         return False
@@ -185,25 +148,24 @@ def _speak_macos_say(text: str) -> None:
 
 def speak(text: str) -> None:
     """
-    Convierte texto a voz eligiendo el motor segun configuracion.
-    Groq TTS solo funciona en ingles; para otros idiomas usa macOS say.
+    Convierte texto a voz.
+    Usa siempre Groq TTS (GROQ_TTS_VOICE) si TTS_ENGINE == 'groq'.
+    Si Groq TTS falla, usa macOS say como fallback.
+    Si TTS_ENGINE != 'groq', usa directamente macOS say.
     """
     if not text:
         return
 
-    language_is_english = WHISPER_LANGUAGE.lower() in ("en", "english")
-
-    if TTS_ENGINE == "groq" and language_is_english:
+    if TTS_ENGINE == "groq":
         success = _speak_groq_tts(text)
         if not success:
             _speak_macos_say(text)
     else:
-        if TTS_ENGINE == "groq" and not language_is_english:
-            logger.debug(f"Groq TTS solo soporta ingles. Usando macOS say para '{WHISPER_LANGUAGE}'.")
         _speak_macos_say(text)
 
 
 def clear_history() -> None:
     """Limpia el historial de conversacion de la sesion actual."""
-    _conversation_history.clear()
+    global _conversation_history
+    _conversation_history = []
     logger.info("Historial de conversacion limpiado")
