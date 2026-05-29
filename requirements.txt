@@ -13,3 +13,6 @@ requests==2.31.0
 
 # Logging y utilidades
 python-dotenv==1.0.0
+
+# Groq API (LLM para respuestas conversacionales)
+groq>=0.9.0
