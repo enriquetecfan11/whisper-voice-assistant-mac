@@ -1,22 +1,26 @@
-import io
 import logging
 import subprocess
 import tempfile
 import os
+from pathlib import Path
 from groq import Groq
 from config import (
     GROQ_API_KEY, GROQ_MODEL, GROQ_SYSTEM_PROMPT,
     TTS_ENGINE, GROQ_TTS_MODEL, GROQ_TTS_VOICE,
     TTS_VOICE, TTS_RATE, WHISPER_LANGUAGE
 )
+from memory import get_memory_as_text, remember, forget_all, get_summary
 
 logger = logging.getLogger(__name__)
 
-# Historial de conversacion (mantiene contexto entre turnos)
+# Historial de conversacion en memoria de sesion
 _conversation_history = []
 
 # Cliente Groq reutilizable
 _groq_client = None
+
+# Directorio raiz del proyecto (donde estan SYSTEM.md y SOUL.md)
+_BASE_DIR = Path(__file__).parent
 
 
 def _get_client() -> Groq:
@@ -27,19 +31,94 @@ def _get_client() -> Groq:
     return _groq_client
 
 
+def _load_md(filename: str) -> str:
+    """Carga un archivo Markdown del proyecto. Devuelve string vacio si no existe."""
+    path = _BASE_DIR / filename
+    if not path.exists():
+        logger.warning(f"{filename} no encontrado en {_BASE_DIR}")
+        return ""
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except IOError as e:
+        logger.warning(f"No se pudo leer {filename}: {e}")
+        return ""
+
+
+def _build_system_prompt() -> str:
+    """
+    Construye el system prompt completo combinando:
+    1. SYSTEM.md  -> capacidades, reglas, entorno tecnico
+    2. SOUL.md    -> personalidad, tono, caracter
+    3. Memoria    -> hechos e info del usuario de sesiones anteriores
+    4. Fallback   -> GROQ_SYSTEM_PROMPT del .env si los .md no existen
+    """
+    parts = []
+
+    system_md = _load_md("SYSTEM.md")
+    soul_md = _load_md("SOUL.md")
+    memory_text = get_memory_as_text()
+
+    if system_md:
+        parts.append(system_md)
+    if soul_md:
+        parts.append(soul_md)
+
+    # Si no hay ningun .md, usar el prompt del .env como fallback
+    if not parts:
+        parts.append(GROQ_SYSTEM_PROMPT)
+
+    # Inyectar memoria persistente si hay algo
+    if memory_text:
+        parts.append(f"\n---\n{memory_text}")
+
+    return "\n\n".join(parts)
+
+
+def _handle_system_commands(text: str) -> str | None:
+    """
+    Detecta comandos especiales de sistema en el texto transcrito.
+    Devuelve la respuesta directa si es un comando, None si no lo es.
+    """
+    text_lower = text.lower().strip()
+
+    if any(w in text_lower for w in ["borra el historial", "limpia el historial", "nueva conversacion"]):
+        _conversation_history.clear()
+        return "Historial limpiado. Empezamos de cero."
+
+    if any(w in text_lower for w in ["que recuerdas", "que sabes de mi", "lo que recuerdas"]):
+        return get_summary()
+
+    if any(w in text_lower for w in ["olvida todo", "borra todo lo que sabes", "borra tu memoria"]):
+        forget_all()
+        return "Memoria borrada. Ya no recuerdo nada."
+
+    return None
+
+
 def ask_groq(user_text: str) -> str:
     """
     Envia el texto del usuario a la API de Groq y devuelve la respuesta del LLM.
-    Mantiene historial de conversacion para contexto.
+    - Detecta comandos de sistema antes de llamar a la API
+    - Carga SYSTEM.md + SOUL.md + memoria en el system prompt
+    - Mantiene historial de conversacion durante la sesion
+    - Guarda automaticamente hechos relevantes en memoria
     """
     if not GROQ_API_KEY:
         logger.error("GROQ_API_KEY no configurada en .env")
-        return "No tengo configurada la API de Groq. Revisa el archivo punto env"
+        return "No tengo configurada la clave de Groq. Revisa el archivo punto env."
+
+    # Comprobar comandos de sistema primero
+    system_response = _handle_system_commands(user_text)
+    if system_response is not None:
+        return system_response
 
     client = _get_client()
 
     _conversation_history.append({"role": "user", "content": user_text})
-    messages = [{"role": "system", "content": GROQ_SYSTEM_PROMPT}] + _conversation_history
+
+    # System prompt dinamico con SYSTEM.md + SOUL.md + memoria
+    system_prompt = _build_system_prompt()
+    messages = [{"role": "system", "content": system_prompt}] + _conversation_history
 
     try:
         logger.info(f"Enviando a Groq ({GROQ_MODEL}): '{user_text}'")
@@ -84,7 +163,6 @@ def _speak_groq_tts(text: str) -> bool:
             response_format="wav",
         )
 
-        # Guardar en archivo temporal y reproducir con afplay (nativo macOS)
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
             tmp_path = tmp.name
             tmp.write(response.read())
@@ -111,35 +189,25 @@ def _speak_macos_say(text: str) -> None:
 
 def speak(text: str) -> None:
     """
-    Convierte texto a voz eligiendo el motor segun configuracion:
-    - 'groq': Groq TTS API (orpheus, solo EN) con fallback automatico a say
-    - 'say':  macOS say directamente (soporta ES y EN)
-
-    Si el idioma configurado NO es 'en', siempre usa macOS say
-    independientemente de TTS_ENGINE, ya que Groq TTS solo soporta ingles.
+    Convierte texto a voz eligiendo el motor segun configuracion.
+    Groq TTS solo funciona en ingles; para otros idiomas usa macOS say.
     """
     if not text:
         return
 
-    # Groq TTS solo funciona en ingles
     language_is_english = WHISPER_LANGUAGE.lower() in ("en", "english")
 
     if TTS_ENGINE == "groq" and language_is_english:
-        # Intentar Groq TTS, si falla usar say
         success = _speak_groq_tts(text)
         if not success:
             _speak_macos_say(text)
     else:
-        # say para espanol u otros idiomas
         if TTS_ENGINE == "groq" and not language_is_english:
-            logger.debug(
-                "Groq TTS solo soporta ingles. Usando macOS say "
-                f"para idioma '{WHISPER_LANGUAGE}'."
-            )
+            logger.debug(f"Groq TTS solo soporta ingles. Usando macOS say para '{WHISPER_LANGUAGE}'.")
         _speak_macos_say(text)
 
 
 def clear_history() -> None:
-    """Limpia el historial de conversacion."""
+    """Limpia el historial de conversacion de la sesion actual."""
     _conversation_history.clear()
     logger.info("Historial de conversacion limpiado")
