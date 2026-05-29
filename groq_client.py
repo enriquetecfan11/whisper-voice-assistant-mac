@@ -1,4 +1,5 @@
 import logging
+from typing import Optional
 import subprocess
 import tempfile
 import os
@@ -74,7 +75,7 @@ def _build_system_prompt() -> str:
     return "\n\n".join(parts)
 
 
-def _handle_system_commands(text: str) -> str | None:
+    def _handle_system_commands(text: str) -> Optional[str]:
     """
     Detecta comandos especiales de sistema en el texto transcrito.
     Devuelve la respuesta directa si es un comando, None si no lo es.
