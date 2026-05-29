@@ -64,18 +64,16 @@ def _build_system_prompt() -> str:
     if soul_md:
         parts.append(soul_md)
 
-    # Si no hay ningun .md, usar el prompt del .env como fallback
     if not parts:
         parts.append(GROQ_SYSTEM_PROMPT)
 
-    # Inyectar memoria persistente si hay algo
     if memory_text:
         parts.append(f"\n---\n{memory_text}")
 
     return "\n\n".join(parts)
 
 
-    def _handle_system_commands(text: str) -> Optional[str]:
+def _handle_system_commands(text: str) -> Optional[str]:
     """
     Detecta comandos especiales de sistema en el texto transcrito.
     Devuelve la respuesta directa si es un comando, None si no lo es.
@@ -102,13 +100,11 @@ def ask_groq(user_text: str) -> str:
     - Detecta comandos de sistema antes de llamar a la API
     - Carga SYSTEM.md + SOUL.md + memoria en el system prompt
     - Mantiene historial de conversacion durante la sesion
-    - Guarda automaticamente hechos relevantes en memoria
     """
     if not GROQ_API_KEY:
         logger.error("GROQ_API_KEY no configurada en .env")
         return "No tengo configurada la clave de Groq. Revisa el archivo punto env."
 
-    # Comprobar comandos de sistema primero
     system_response = _handle_system_commands(user_text)
     if system_response is not None:
         return system_response
@@ -117,7 +113,6 @@ def ask_groq(user_text: str) -> str:
 
     _conversation_history.append({"role": "user", "content": user_text})
 
-    # System prompt dinamico con SYSTEM.md + SOUL.md + memoria
     system_prompt = _build_system_prompt()
     messages = [{"role": "system", "content": system_prompt}] + _conversation_history
 
@@ -133,7 +128,6 @@ def ask_groq(user_text: str) -> str:
 
         _conversation_history.append({"role": "assistant", "content": assistant_reply})
 
-        # Limitar historial a los ultimos 10 turnos
         if len(_conversation_history) > 20:
             _conversation_history.pop(0)
             _conversation_history.pop(0)
@@ -155,7 +149,8 @@ def _speak_groq_tts(text: str) -> bool:
         return False
     try:
         client = _get_client()
-        logger.info(f"Groq TTS ({GROQ_TTS_VOICE}): '{text[:50]}...'" if len(text) > 50 else f"Groq TTS: '{text}'")
+        label = f"'{text[:50]}...'" if len(text) > 50 else f"'{text}'"
+        logger.info(f"Groq TTS ({GROQ_TTS_VOICE}): {label}")
 
         response = client.audio.speech.create(
             model=GROQ_TTS_MODEL,
